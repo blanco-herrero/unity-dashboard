@@ -1,7 +1,7 @@
 # UNITY methods dashboard
 
-Repository: https://github.com/blanco-herrero/unity_methods
-Dashboard: https://blanco-herrero.github.io/unity_methods/
+Repository: https://github.com/blanco-herrero/unity_dasboard
+Dashboard: https://blanco-herrero.github.io/unity_dashboard/
 
 ## Interpretation
 Reference lines are unweighted medians of method means. Fixed overview medians do not move with category filters; selected-objective medians use plotted methods after filtering.
