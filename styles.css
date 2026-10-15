@@ -1,0 +1,33 @@
+*{box-sizing:border-box}
+body{margin:0;background:#f5f8fc;color:#20364b;font:15px/1.45 Arial,Helvetica,sans-serif}
+#app{max-width:1700px;margin:auto;padding:20px}
+h1{font-size:27px;margin:0 0 8px}
+h2{font-size:17px;margin:0 0 10px}
+.note{font-size:12px;color:#53697c}
+.card{background:white;border:1px solid #dde5ee;padding:16px;border-radius:9px}
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:13px;margin:14px 0}
+button,select,input{font:inherit}
+button,select{background:white;border:1px solid #ccd8e3;border-radius:6px;padding:9px;color:#20364b;max-width:100%}
+button{cursor:pointer}
+button:hover{background:#eaf1f7}
+button:disabled{opacity:.5}
+.tab{background:#356e9c;color:white}
+.selector{width:100%;margin:6px 0}
+label{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:13px}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 285px;gap:15px;margin-top:15px}
+.plot{min-width:0;overflow-x:auto;padding:5px;position:relative}
+svg{width:100%;height:auto;display:block;font-family:Arial,Helvetica,sans-serif}
+.objective-plot svg{min-width:980px}
+aside{display:flex;flex-direction:column;gap:13px}
+.category{display:flex;gap:9px;align-items:center;text-align:left;width:100%;border:0;padding:8px 0}
+.swatch{width:12px;height:12px;border-radius:50%;flex-shrink:0}
+.stats{font-size:13px;line-height:1.8}
+.tip{position:absolute;right:12px;top:90px;background:rgba(255,255,255,.98);border:1px solid #ccd8e3;border-radius:7px;padding:12px;font-size:13px;max-width:330px;width:70%;pointer-events:none;box-shadow:0 3px 12px #0002}
+.tip[hidden]{display:none}
+summary{cursor:pointer;font-weight:bold}
+svg g[role=button]{cursor:pointer}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid #4477aa;outline-offset:2px}
+svg g[role=button]:focus circle{stroke-dasharray:3 2}
+.pill{display:inline-block;font-size:12px;border-radius:20px;padding:4px 10px;background:#eaf1f7;margin-bottom:9px}
+a{color:#285c88}
+@media(max-width:850px){#app{padding:10px}.layout{grid-template-columns:1fr}h1{font-size:23px}}
