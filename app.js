@@ -736,10 +736,10 @@
       '\x3csection class="card">\x3cdiv class="controls">' +
       '\x3cbutton data-mode="methods" class="' +
       (!objectiveMode ? 'tab' : '') +
-      '">Compare methods\x3c/button>' +
+      '">Compare actionability of different methods to achieve objectives\x3c/button>' +
       '\x3cbutton data-mode="objectives" class="' +
       (objectiveMode ? 'tab' : '') +
-      '">Compare objectives\x3c/button>' +
+      '">Compare weight of evidence of a method to achieve different objectives\x3c/button>' +
       '\x3cbutton id="reset">Reset\x3c/button>\x3c/div>' +
       '\x3clabel>\x3cstrong>' +
       (objectiveMode ? 'Method' : 'Knowledge objective') +
@@ -898,7 +898,7 @@
       '\x3c/h2>\x3cselect id="details-select" class="selector" ' +
       'aria-label="Details selector">' +
       options([
-        ['', 'Select for details'],
+        ['', objectiveMode ? 'Select an objective' : 'Select a method'],
         ...model.all.map(row => [row.id, row.id + ' — ' + row.name])
       ], chosen) +
       '\x3c/select>\x3cdiv id="details">\x3c/div>' +
