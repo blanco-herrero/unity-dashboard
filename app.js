@@ -10,6 +10,7 @@
   const format = v => Number.isFinite(v) ? v.toFixed(3) : 'Not available';
   const borderWidth = n => 1 + 1.3 * Math.sqrt(n || 0);
   const escapeText = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const objectiveLabel = (id, name) => id + '. ' + name;
   function median(values) {
     const a = values.filter(Number.isFinite).sort((a, b) => a - b);
     return a.length ? (a[Math.floor((a.length - 1) / 2)] + a[Math.floor(a.length / 2)]) / 2 : null;
@@ -78,7 +79,7 @@
     return { all, visible, missing: all.filter(r => r.evidence === null || !r.count), missingTime: rated.filter(r => r.x === null), maximumCount, area: state.oi >= 0 && state.relative ? 800 / maximumCount : 8, medianX: state.oi >= 0 && state.local ? median(visible.map(r => r.x)) : median(methods.map(m => m.timeliness)), medianY: state.oi >= 0 && state.local ? median(visible.map(r => r.evidence)) : median(methods.map(m => m.evidence)) };
   }
   function viewTitle() {
-    return state.mode === 'objectives' ? methods[state.mi].id + '. ' + methods[state.mi].name : state.oi < 0 ? 'Overview — all knowledge objectives' : db.objectives[state.oi][1];
+    return state.mode === 'objectives' ? methods[state.mi].id + '. ' + methods[state.mi].name : state.oi < 0 ? 'Overview — all knowledge objectives' : objectiveLabel(db.objectives[state.oi][0], db.objectives[state.oi][1]);
   }
   function viewSubtitle() {
     return state.mode === 'objectives' ? 'Overall mean timeliness: ' + format(methods[state.mi].timeliness) + ' · Reverse-coded: 1 = slowest; 5 = fastest' : state.oi < 0 ? '' : db.objectives[state.oi][3] || '';
@@ -108,9 +109,10 @@
     const top = Math.max(150, subtitleY + (subtitle ? wrapText(subtitle, 125).length * 17 : 0) + 65);
     let cursor = top;
     const rows = om ? model.all.map(row => {
-      const lines = wrapText(row.name, 46), height = Math.max(57, lines.length * 15 + 18), y = cursor + height / 2;
+      const label = objectiveLabel(row.id, row.name);
+      const lines = wrapText(label, 46), height = Math.max(57, lines.length * 15 + 18), y = cursor + height / 2;
       cursor += height;
-      return { row, lines, y };
+      return { row, label, lines, y };
     }) : [];
     const bottom = om ? cursor + 8 : top + 730, height = bottom + 245;
     let minX = om ? 0 : 1, maxX = om ? 6 : 5, minY = 1, maxY = 5;
@@ -136,8 +138,8 @@
     const stepX = !om && state.zoom ? .5 : 1;
     for (let t = minX; t <= maxX + .001; t += stepX) s += line(X(t), top - 18, X(t), bottom) + svgText(t, X(t), bottom + 25, 30, 13, 15, 'middle');
     if (om) {
-      rows.forEach(({ row: r, lines, y }) => {
-        s += line(left, y, right, y) + svgText(r.name, left - 17, y - (lines.length - 1) * 7.5 + 4, 46, 12, 15, 'end');
+      rows.forEach(({ row: r, label, lines, y }) => {
+        s += line(left, y, right, y) + svgText(label, left - 17, y - (lines.length - 1) * 7.5 + 4, 46, 12, 15, 'end');
         if (r.evidence !== null && r.count > 0) {
           if (state.sd && r.sd !== null) {
             const a = X(r.evidence - r.sd), b = X(r.evidence + r.sd);
@@ -186,8 +188,9 @@
     if (!r) return '<p class="note">Hover, click, tap, or use the selector to inspect values.</p>';
     let s = `<div class="stats"><strong>${escapeText(r.id + ' — ' + r.name)}</strong><div>Mean evidence: ${format(r.evidence)}</div><div>Evidence assessments: ${r.count}</div><div>Preferred selections: ${r.preference ?? 'Not displayed in overview'}</div>`;
     if (state.mode === 'methods') {
-      s += `<div>Overall timeliness: ${format(r.timeliness)}</div><div>Active timeliness: ${format(r.x)}</div>`;
-      if (state.oi >= 0) s += `<div>Subgroup timeliness: ${format(r.subgroupTime)}</div><div>Subgroup timeliness respondents: ${r.subgroupCount}</div>`;
+      s += `<div>Overall mean timeliness: ${format(r.timeliness)}</div>`;
+      if (state.oi >= 0) s += `<div>Mean timeliness among participants selecting this objective: ${format(r.subgroupTime)}</div><div>Participants contributing to this subgroup estimate: ${r.subgroupCount}</div>`;
+      s += `<div>Chart uses: ${state.oi >= 0 && state.timing === 'subgroup' ? 'objective-participant estimate' : 'overall estimate'}</div>`;
     } else {
       s += `<div>Sample SD: ${format(r.sd)}</div>`;
       if (r.sd !== null) s += `<div>Mean ±1 SD: ${format(r.evidence - r.sd)}–${format(r.evidence + r.sd)}</div>`;
@@ -201,7 +204,7 @@
   function render() {
     model = calculateView();
     const om = state.mode === 'objectives', selectorLabel = om ? 'Select an objective' : 'Select a method';
-    let html = `<span class="pill">UNITY · VERSION 3</span><h1>Timeliness, evidence and methodological preference</h1><p class="note">Compare actionability across methods, or a method’s assessed weight of evidence across objectives.</p><section class="card"><div class="controls mode-controls"><button data-mode="methods" class="${!om ? 'tab' : ''}">Compare actionability of different methods to achieve objectives</button><button data-mode="objectives" class="${om ? 'tab' : ''}">Compare weight of evidence of a method to achieve different objectives</button><button id="reset">Reset</button></div><label><strong>${om ? 'Method' : 'Knowledge objective'}</strong></label><select class="selector" data-setting="${om ? 'mi' : 'oi'}" aria-label="${om ? 'Method' : 'Knowledge objective'}">${options(om ? methods.map((m, i) => [i, m.id + ' — ' + m.name]) : [[-1, 'Overview — all objectives'], ...db.objectives.map((o, i) => [i, o[1]])], om ? state.mi : state.oi)}</select><div class="controls">`;
+    let html = `<span class="pill">UNITY · VERSION 3</span><h1>Timeliness, evidence and methodological preference</h1><p class="note">Compare actionability across methods, or a method’s assessed weight of evidence across objectives.</p><section class="card"><div class="controls mode-controls"><button data-mode="methods" class="${!om ? 'tab' : ''}">Compare actionability of different methods to achieve objectives</button><button data-mode="objectives" class="${om ? 'tab' : ''}">Compare weight of evidence of a method to achieve different objectives</button><button id="reset">Reset</button></div><label><strong>${om ? 'Method' : 'Knowledge objective'}</strong></label><select class="selector" data-setting="${om ? 'mi' : 'oi'}" aria-label="${om ? 'Method' : 'Knowledge objective'}">${options(om ? methods.map((m, i) => [i, m.id + ' — ' + m.name]) : [[-1, 'Overview — all objectives'], ...db.objectives.map((o, i) => [i, objectiveLabel(o[0], o[1])])], om ? state.mi : state.oi)}</select><div class="controls">`;
     if (om) html += checkbox('sd', 'Show mean ±1 SD whiskers') + checkbox('values', 'Show evidence values');
     else html += `<label>Timeliness <select data-setting="timing" ${state.oi < 0 ? 'disabled' : ''}>${options([['overall', 'Overall method estimate'], ['subgroup', 'Among participants selecting this objective']], state.timing)}</select></label>` + checkbox('local', 'Selected-objective medians', state.oi < 0) + checkbox('relative', 'Scale bubbles within objective', state.oi < 0) + checkbox('labels', 'Method labels') + checkbox('zoom', 'Zoom to observed values');
     html += `<label>Dot size <input type="range" data-setting="size" min="0.7" max="1.7" step="0.1" value="${state.size}"></label></div><div class="controls"><button data-export="svg">Export SVG</button><button data-export="png">Export PNG</button><button id="csv">Export view CSV</button><button id="json">Export all data JSON</button><label>Load JSON locally <input id="local" type="file" accept=".json,application/json"></label></div><p class="note">${om ? 'Objectives remain in numbered order. Whiskers show mean ±1 sample SD, not confidence intervals. Shading marks the valid 1–5 rating scale; the plot extends from 0 to 6.' : state.oi < 0 ? 'The overview uses uniform outlines. Preference-count borders appear for individual objectives.' : 'Preference-count borders use a fixed scale across objectives.'}</p>`;
@@ -209,7 +212,7 @@
     html += `<p class="note" id="status" role="status" aria-live="polite">${escapeText(status)}</p></section><div class="layout"><main class="card plot ${om ? 'objective-plot' : ''}">${drawChart()}<div id="tip" class="tip" hidden></div><details style="margin:12px"><summary>Missing ratings (${model.missing.length} evidence${model.missingTime.length ? '; ' + model.missingTime.length + ' timeliness' : ''})</summary><p class="note">No evidence ratings: ${model.missing.length ? model.missing.map(r => escapeText(r.id) + '*').join(', ') : 'None'}.</p>`;
     if (model.missing.length) html += '<p class="note">* Not plotted at zero. Missing evidence may reflect no relevance selection or declining assessment due to lack of knowledge; the dataset does not identify the reason.</p>';
     if (model.missingTime.length) html += `<p class="note">No subgroup timeliness: ${model.missingTime.map(r => escapeText(r.id) + '†').join(', ')}. † Evidence is available; choose overall timeliness to plot these methods. No values are silently substituted.</p>`;
-    html += '</details>' + (om ? '<p class="note" style="margin:12px">Long objective descriptions wrap onto multiple lines. The figure is designed to fit the available width once the updated stylesheet is installed.</p>' : '') + `</main><aside><section class="card"><h2>${om ? 'Selected methodology' : 'Broad methodology'}</h2>`;
+    html += '</details>' + `</main><aside><section class="card"><h2>${om ? 'Selected methodology' : 'Broad methodology'}</h2>`;
     if (om) html += `<p style="color:${COLORS[methods[state.mi].category]}">${escapeText(db.categories[methods[state.mi].category])}</p><p class="note">A common dot-area scale is used across method-centred views. It differs from the scatterplot scale.</p>`;
     else html += db.categories.map((c, i) => `<button class="category" data-category="${i}" aria-pressed="${!hidden.includes(i)}" style="opacity:${hidden.includes(i) ? .4 : 1}"><span class="swatch" style="background:${COLORS[i]}"></span>${escapeText(c)}</button>`).join('') + '<p class="note">Click to hide/show. Overview medians remain fixed; selected-objective medians use currently plotted methods.</p>';
     html += `</section><section class="card"><h2>${om ? 'Objective details' : 'Method details'}</h2><select id="details-select" class="selector" aria-label="${selectorLabel}">${options([['', selectorLabel], ...model.all.map(r => [r.id, r.id + ' — ' + r.name])], chosen)}</select><div id="details"></div><button id="clear">Clear selection</button></section><section class="card"><h2>View summary</h2><div class="stats"><div>${model.visible.length} ${om ? 'objectives with evidence' : 'plotted methods'}</div><div>${model.missing.length} without evidence ratings</div>`;
@@ -263,7 +266,7 @@
   function filename() { return state.mode === 'objectives' ? methods[state.mi].id + '_objectives' : state.oi < 0 ? 'Overview' : db.objectives[state.oi][0]; }
   function exportCSV() {
     const om = state.mode === 'objectives', m = methods[state.mi];
-    const headings = om ? ['Method ID', 'Method name', 'Objective ID', 'Objective', 'Mean weight of evidence', 'Evidence assessments', 'Preferred selections', 'Evidence sample SD', 'Mean minus SD', 'Mean plus SD', 'Overall reverse-coded timeliness'] : ['View', 'Method ID', 'Method name', 'Broad methodology', 'Overall reverse-coded timeliness', 'Active reverse-coded timeliness', 'Objective-participant reverse-coded timeliness', 'Objective-participant timeliness respondents', 'Mean weight of evidence', 'Evidence assessments', 'Preferred selections', 'Evidence sample SD'];
+    const headings = om ? ['Method ID', 'Method name', 'Objective ID', 'Objective', 'Mean weight of evidence', 'Evidence assessments', 'Preferred selections', 'Evidence sample SD', 'Mean minus SD', 'Mean plus SD', 'Overall reverse-coded timeliness'] : ['View', 'Method ID', 'Method name', 'Broad methodology', 'Overall reverse-coded timeliness', 'Plotted reverse-coded timeliness', 'Objective-participant reverse-coded timeliness', 'Objective-participant timeliness respondents', 'Mean weight of evidence', 'Evidence assessments', 'Preferred selections', 'Evidence sample SD'];
     const rows = om ? model.all.map(r => [m.id, m.name, r.id, r.name, r.evidence, r.count, r.preference, r.sd, r.sd === null || r.evidence === null ? null : r.evidence - r.sd, r.sd === null || r.evidence === null ? null : r.evidence + r.sd, m.timeliness]) : model.all.map(r => [viewTitle(), r.id, r.name, db.categories[r.category], r.timeliness, r.x, r.subgroupTime, r.subgroupCount, r.evidence, r.count, r.preference, r.sd]);
     function cell(v) { let text = v == null ? '' : String(v); if (typeof v === 'string' && /^[=+@-]/.test(text)) text = "'" + text; return '"' + text.replace(/"/g, '""') + '"'; }
     download(new Blob(['\uFEFF' + [headings, ...rows].map(r => r.map(cell).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' }), filename() + '_data.csv');
@@ -305,4 +308,3 @@
   }
   start();
 })();
-
