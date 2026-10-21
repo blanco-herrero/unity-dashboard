@@ -1,1333 +1,308 @@
 'use strict';
 
 (function () {
-  const COLORS = [
-    '#4477AA', '#EE7733', '#228833', '#CC6677',
-    '#AA3377', '#66AABB', '#666666'
-  ];
-
-  const DEFAULTS = {
-    mode: 'methods',
-    oi: -1,
-    mi: 0,
-    timing: 'overall',
-    relative: true,
-    local: false,
-    labels: true,
-    values: true,
-    zoom: false,
-    size: 1
-  };
-
-  let db;
-  let methods;
-  let model;
-  let state = { ...DEFAULTS };
-  let hidden = [];
-  let chosen = '';
-  let hovered = '';
-  let status = '';
-
+  const COLORS = ['#4477AA', '#EE7733', '#228833', '#CC6677', '#AA3377', '#66AABB', '#666666'];
+  const DEFAULTS = { mode: 'methods', oi: -1, mi: 0, timing: 'overall', relative: true, local: false, labels: true, values: true, sd: true, zoom: false, size: 1 };
   const app = document.getElementById('app');
+  let db, methods, model;
+  let state = { ...DEFAULTS }, hidden = [], chosen = '', hovered = '', status = '';
 
-  function format(value) {
-    return Number.isFinite(value)
-      ? value.toFixed(3)
-      : 'Not available';
-  }
-
-  function borderWidth(count) {
-    return 1 + 1.3 * Math.sqrt(count || 0);
-  }
-
-  function escapeText(value) {
-    const amp = String.fromCharCode(38);
-    const replacements = {
-      38: amp + 'amp;',
-      60: amp + 'lt;',
-      62: amp + 'gt;',
-      34: amp + 'quot;',
-      39: amp + '#39;'
-    };
-
-    return String(value == null ? '' : value)
-      .replace(/[&<>"']/g, character =>
-        replacements[character.charCodeAt(0)]
-      );
-  }
-
+  const format = v => Number.isFinite(v) ? v.toFixed(3) : 'Not available';
+  const borderWidth = n => 1 + 1.3 * Math.sqrt(n || 0);
+  const escapeText = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   function median(values) {
-    const sorted = values
-      .filter(Number.isFinite)
-      .sort((a, b) => a - b);
-
-    const n = sorted.length;
-
-    if (!n) return null;
-
-    return n % 2
-      ? sorted[(n - 1) / 2]
-      : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+    const a = values.filter(Number.isFinite).sort((a, b) => a - b);
+    return a.length ? (a[Math.floor((a.length - 1) / 2)] + a[Math.floor(a.length / 2)]) / 2 : null;
   }
-
   function wrapText(value, maximum) {
-    const lines = [];
-    let line = '';
-
+    const lines = []; let line = '';
     String(value).split(/\s+/).forEach(word => {
-      if (line && line.length + word.length + 1 > maximum) {
-        lines.push(line);
-        line = word;
-      } else {
-        line += (line ? ' ' : '') + word;
-      }
+      if (line && line.length + word.length + 1 > maximum) { lines.push(line); line = word; }
+      else line += (line ? ' ' : '') + word;
     });
-
     if (line) lines.push(line);
     return lines;
   }
-
-  function svgText(
-    value, x, y, maximum = 90, size = 12,
-    spacing = 15, anchor = 'start', bold = false
-  ) {
-    return '\x3ctext x="' + x +
-      '" y="' + y +
-      '" font-size="' + size +
-      '" text-anchor="' + anchor +
-      '" font-weight="' + (bold ? 'bold' : 'normal') +
-      '" fill="#20364B">' +
-      wrapText(value, maximum).map((line, i) =>
-        '\x3ctspan x="' + x +
-        '" dy="' + (i ? spacing : 0) + '">' +
-        escapeText(line) + '\x3c/tspan>'
-      ).join('') +
-      '\x3c/text>';
+  function svgText(value, x, y, maximum = 90, size = 12, spacing = 15, anchor = 'start', bold = false, color = '#20364B') {
+    return `<text x="${x}" y="${y}" font-size="${size}" text-anchor="${anchor}" font-weight="${bold ? 'bold' : 'normal'}" fill="${color}">${wrapText(value, maximum).map((line, i) => `<tspan x="${x}" dy="${i ? spacing : 0}">${escapeText(line)}</tspan>`).join('')}</text>`;
   }
 
+  // Website schema: objectives = [ID, title, methodRows, optional subtitle].
+  // methodRows = [evidenceMean, evidenceCount, subgroupTime, subgroupCount,
+  //               preferredCount, optional sampleSD]. Timeliness is already reversed.
   function validateDataset(data) {
-    if (
-      !data ||
-      !Array.isArray(data.methods) ||
-      !Array.isArray(data.objectives) ||
-      !Array.isArray(data.categories) ||
-      !data.methods.length ||
-      !data.objectives.length ||
-      !data.categories.length
-    ) {
-      throw new Error('Missing methods, objectives or categories.');
-    }
-
-    const validScore = value =>
-      value === null ||
-      (
-        Number.isFinite(value) &&
-        value >= 1 &&
-        value <= 5
-      );
-
-    const validCount = value =>
-      Number.isInteger(value) && value >= 0;
-
-    const methodIDs = new Set();
-
-    data.methods.forEach((row, index) => {
-      if (
-        !Array.isArray(row) ||
-        row.length !== 6 ||
-        !Number.isInteger(row[0]) ||
-        row[0] < 1 ||
-        methodIDs.has(row[0]) ||
-        !Number.isInteger(row[1]) ||
-        row[1] < 0 ||
-        row[1] >= data.categories.length ||
-        typeof row[2] !== 'string' ||
-        !validScore(row[3]) ||
-        !validScore(row[4]) ||
-        !validCount(row[5]) ||
-        (row[4] === null) !== (row[5] === 0)
-      ) {
-        throw new Error('Invalid method row ' + (index + 1) + '.');
-      }
-
-      methodIDs.add(row[0]);
+    if (!data || !['methods', 'objectives', 'categories'].every(k => Array.isArray(data[k]) && data[k].length)) throw new Error('Missing methods, objectives or categories.');
+    if (!data.categories.every(c => typeof c === 'string')) throw new Error('Invalid categories.');
+    const score = v => v === null || (Number.isFinite(v) && v >= 1 && v <= 5);
+    const count = v => Number.isInteger(v) && v >= 0;
+    let ids = new Set();
+    data.methods.forEach((r, i) => {
+      if (!Array.isArray(r) || r.length !== 6 || !Number.isInteger(r[0]) || r[0] < 1 || ids.has(r[0]) || !count(r[1]) || r[1] >= data.categories.length || typeof r[2] !== 'string' || !score(r[3]) || !score(r[4]) || !count(r[5]) || (r[4] === null) !== (r[5] === 0)) throw new Error('Invalid method row ' + (i + 1) + '.');
+      ids.add(r[0]);
     });
-
-    const objectiveIDs = new Set();
-
-    data.objectives.forEach(objective => {
-      if (
-        !Array.isArray(objective) ||
-        objective.length !== 3 ||
-        typeof objective[0] !== 'string' ||
-        objectiveIDs.has(objective[0]) ||
-        typeof objective[1] !== 'string' ||
-        !Array.isArray(objective[2]) ||
-        objective[2].length !== data.methods.length
-      ) {
-        throw new Error('Invalid objective or method alignment.');
-      }
-
-      objectiveIDs.add(objective[0]);
-
-      objective[2].forEach((row, index) => {
-        if (
-          !Array.isArray(row) ||
-          row.length !== 5 ||
-          !validScore(row[0]) ||
-          !validCount(row[1]) ||
-          !validScore(row[2]) ||
-          !validCount(row[3]) ||
-          !validCount(row[4]) ||
-          (row[0] === null) !== (row[1] === 0) ||
-          (row[2] === null) !== (row[3] === 0)
-        ) {
-          throw new Error(
-            'Invalid scores or counts at ' +
-            objective[0] + ', M' + data.methods[index][0] + '.'
-          );
-        }
+    ids = new Set();
+    data.objectives.forEach(o => {
+      if (!Array.isArray(o) || ![3, 4].includes(o.length) || typeof o[0] !== 'string' || ids.has(o[0]) || typeof o[1] !== 'string' || !Array.isArray(o[2]) || o[2].length !== data.methods.length || (o.length === 4 && typeof o[3] !== 'string')) throw new Error('Invalid objective or method alignment.');
+      ids.add(o[0]);
+      o[2].forEach((r, i) => {
+        if (!Array.isArray(r) || ![5, 6].includes(r.length) || !score(r[0]) || !count(r[1]) || !score(r[2]) || !count(r[3]) || !count(r[4]) || (r[0] === null) !== (r[1] === 0) || (r[2] === null) !== (r[3] === 0) || (r.length === 6 && !(r[5] === null || (Number.isFinite(r[5]) && r[5] >= 0 && r[1] >= 2)))) throw new Error('Invalid scores, counts or SD at ' + o[0] + ', M' + data.methods[i][0] + '.');
       });
     });
-
     return data;
   }
-
   function loadDataset(data) {
-    db = validateDataset(data);
-
-    methods = db.methods.map((row, index) => ({
-      id: 'M' + row[0],
-      category: row[1],
-      name: row[2],
-      timeliness: row[3],
-      evidence: row[4],
-      count: row[5],
-      index
-    }));
-
-    state = { ...DEFAULTS };
-    hidden = [];
-    chosen = '';
-    hovered = '';
-
-    const preferences = db.objectives.reduce(
-      (total, objective) =>
-        total + objective[2].reduce(
-          (subtotal, row) => subtotal + row[4], 0
-        ),
-      0
-    );
-
-    status = methods.length + ' methods · ' +
-      db.objectives.length + ' objectives · ' +
-      preferences + ' preferred selections.';
-
+    const validated = validateDataset(data);
+    db = validated;
+    methods = db.methods.map((r, index) => ({ id: 'M' + r[0], category: r[1], name: r[2], timeliness: r[3], evidence: r[4], count: r[5], index }));
+    state = { ...DEFAULTS }; hidden = []; chosen = ''; hovered = '';
+    status = methods.length + ' methods · ' + db.objectives.length + ' objectives · ' + db.objectives.reduce((n, o) => n + o[2].reduce((a, r) => a + r[4], 0), 0) + ' preferred selections.';
+    if (!db.objectives.some(o => o[2].some(r => r.length === 6))) status += ' Current dataset has no SD field; whiskers will appear after the dataset update.';
     render();
   }
-
   function calculateView() {
     if (state.mode === 'objectives') {
-      const all = db.objectives.map(objective => {
-        const row = objective[2][state.mi];
-
-        return {
-          id: objective[0],
-          name: objective[1],
-          evidence: row[0],
-          count: row[1],
-          subgroupTime: row[2],
-          subgroupCount: row[3],
-          preference: row[4]
-        };
+      const all = db.objectives.map(o => {
+        const r = o[2][state.mi];
+        return { id: o[0], name: o[1], evidence: r[0], count: r[1], subgroupTime: r[2], subgroupCount: r[3], preference: r[4], sd: r[5] ?? null };
       });
-
-      return {
-        all,
-        visible: all.filter(row =>
-          row.evidence !== null && row.count > 0
-        ),
-        missing: all.filter(row =>
-          row.evidence === null || !row.count
-        ),
-        missingTime: [],
-        area: 42,
-        medianX: null,
-        medianY: null
-      };
+      return { all, visible: all.filter(r => r.evidence !== null && r.count > 0), missing: all.filter(r => r.evidence === null || !r.count), missingTime: [], area: 42, medianX: null, medianY: null };
     }
-
-    const all = methods.map(method => {
-      if (state.oi < 0) {
-        return {
-          ...method,
-          x: method.timeliness,
-          preference: null,
-          subgroupTime: null,
-          subgroupCount: null
-        };
-      }
-
-      const row = db.objectives[state.oi][2][method.index];
-
-      return {
-        ...method,
-        evidence: row[0],
-        count: row[1],
-        subgroupTime: row[2],
-        subgroupCount: row[3],
-        preference: row[4],
-        x: state.timing === 'subgroup'
-          ? row[2]
-          : method.timeliness
-      };
+    const all = methods.map(m => {
+      if (state.oi < 0) return { ...m, x: m.timeliness, preference: null, subgroupTime: null, subgroupCount: null, sd: null };
+      const r = db.objectives[state.oi][2][m.index];
+      return { ...m, evidence: r[0], count: r[1], subgroupTime: r[2], subgroupCount: r[3], preference: r[4], sd: r[5] ?? null, x: state.timing === 'subgroup' ? r[2] : m.timeliness };
     });
-
-    const rated = all.filter(row =>
-      row.evidence !== null && row.count > 0
-    );
-
-    const visible = rated.filter(row =>
-      row.x !== null && !hidden.includes(row.category)
-    );
-
-    const maximumCount = Math.max(
-      1, ...rated.map(row => row.count)
-    );
-
-    return {
-      all,
-      visible,
-      missing: all.filter(row =>
-        row.evidence === null || !row.count
-      ),
-      missingTime: rated.filter(row => row.x === null),
-      maximumCount,
-      area: state.oi >= 0 && state.relative
-        ? 800 / maximumCount
-        : 8,
-      medianX: state.oi >= 0 && state.local
-        ? median(visible.map(row => row.x))
-        : median(methods.map(row => row.timeliness)),
-      medianY: state.oi >= 0 && state.local
-        ? median(visible.map(row => row.evidence))
-        : median(methods.map(row => row.evidence))
-    };
+    const rated = all.filter(r => r.evidence !== null && r.count > 0);
+    const visible = rated.filter(r => r.x !== null && !hidden.includes(r.category));
+    const maximumCount = Math.max(1, ...rated.map(r => r.count));
+    return { all, visible, missing: all.filter(r => r.evidence === null || !r.count), missingTime: rated.filter(r => r.x === null), maximumCount, area: state.oi >= 0 && state.relative ? 800 / maximumCount : 8, medianX: state.oi >= 0 && state.local ? median(visible.map(r => r.x)) : median(methods.map(m => m.timeliness)), medianY: state.oi >= 0 && state.local ? median(visible.map(r => r.evidence)) : median(methods.map(m => m.evidence)) };
   }
-
   function viewTitle() {
-    if (state.mode === 'objectives') {
-      return methods[state.mi].id + '. ' + methods[state.mi].name;
-    }
-
-    return state.oi < 0
-      ? 'Overview — all knowledge objectives'
-      : db.objectives[state.oi][1];
+    return state.mode === 'objectives' ? methods[state.mi].id + '. ' + methods[state.mi].name : state.oi < 0 ? 'Overview — all knowledge objectives' : db.objectives[state.oi][1];
   }
-
-  function drawLegends(y, wide) {
-    const color = state.mode === 'objectives'
-      ? COLORS[methods[state.mi].category]
-      : '#879DB1';
-
-    const counts = state.mode === 'objectives'
-      ? [1, 5, 10]
-      : state.oi >= 0 && state.relative
-        ? [
-          1,
-          Math.max(1, Math.round(model.maximumCount / 2)),
-          model.maximumCount
-        ]
-        : [5, 25, 100];
-
-    let result = svgText(
-      'Dot area: evidence assessments',
-      100, y, 100, 13, 15, 'start', true
-    );
-
-    counts.forEach((count, i) => {
-      const x = 135 + i * 100;
-      const radius = Math.sqrt(
-        count * model.area / Math.PI
-      ) * state.size;
-
-      result += '\x3ccircle cx="' + x +
-        '" cy="' + (y + 40) +
-        '" r="' + radius +
-        '" fill="' + color +
-        '" stroke="#20364B" stroke-width="1"/>' +
-        svgText(count, x, y + 75, 30, 12, 15, 'middle');
+  function viewSubtitle() {
+    return state.mode === 'objectives' ? 'Overall mean timeliness: ' + format(methods[state.mi].timeliness) + ' · Reverse-coded: 1 = slowest; 5 = fastest' : state.oi < 0 ? '' : db.objectives[state.oi][3] || '';
+  }
+  function drawLegends(y) {
+    const om = state.mode === 'objectives';
+    const color = om ? COLORS[methods[state.mi].category] : '#879DB1';
+    const counts = om ? [1, 5, 10] : state.oi >= 0 && state.relative ? [1, Math.max(1, Math.round(model.maximumCount / 2)), model.maximumCount] : [5, 25, 100];
+    let s = svgText('Dot area: evidence assessments', 65, y, 100, 13, 15, 'start', true);
+    counts.forEach((n, i) => {
+      const x = 110 + i * 110;
+      s += `<circle cx="${x}" cy="${y + 40}" r="${Math.sqrt(n * model.area / Math.PI) * state.size}" fill="${color}" stroke="#20364B"/>` + svgText(n, x, y + 85, 30, 12, 15, 'middle');
     });
-
-    if (state.mode === 'objectives' || state.oi >= 0) {
-      result += svgText(
-        'Border: preferred selections (count)',
-        wide ? 730 : 560,
-        y, 100, 13, 15, 'start', true
-      );
-
-      [0, 1, 3, 7].forEach((count, i) => {
-        const x = (wide ? 755 : 585) + i * 75;
-
-        result += '\x3ccircle cx="' + x +
-          '" cy="' + (y + 40) +
-          '" r="10" fill="' + color +
-          '" stroke="#20364B" stroke-width="' +
-          borderWidth(count) + '"/>' +
-          svgText(count, x, y + 75, 30, 12, 15, 'middle');
+    if (om || state.oi >= 0) {
+      s += svgText('Border: preferred selections (count)', 650, y, 100, 13, 15, 'start', true);
+      [0, 1, 3, 7].forEach((n, i) => {
+        const x = 680 + i * 85;
+        s += `<circle cx="${x}" cy="${y + 40}" r="10" fill="${color}" stroke="#20364B" stroke-width="${borderWidth(n)}"/>` + svgText(n, x, y + 85, 30, 12, 15, 'middle');
       });
     }
-
-    return result;
+    return s;
   }
-
   function drawChart() {
-    const objectiveMode = state.mode === 'objectives';
-
-    const width = 1180;
-    const left = objectiveMode ? 380 : 100;
-    const right = objectiveMode ? 1120 : 920;
-    const top = objectiveMode ? 115 : 100;
-
-    let rowCursor = top;
-
-    const objectiveRows = objectiveMode
-      ? model.all.map(row => {
-        const lines = wrapText(row.name, 46);
-        const rowHeight = Math.max(57, lines.length * 15 + 18);
-        const y = rowCursor + rowHeight / 2;
-        rowCursor += rowHeight;
-        return { row, y, lines };
-      })
-      : [];
-
-    const bottom = objectiveMode ? rowCursor + 8 : 900;
-    const height = objectiveMode ? bottom + 240 : 1170;
-
-    let minX = 1;
-    let maxX = 5;
-    let minY = 1;
-    let maxY = 5;
-
-    if (!objectiveMode && state.zoom && model.visible.length) {
-      const xs = model.visible.map(row => row.x);
-      const ys = model.visible.map(row => row.evidence);
-
+    const om = state.mode === 'objectives', width = 1180, left = om ? 380 : 100, right = om ? 1120 : 960;
+    const titleLines = wrapText(viewTitle(), 110), subtitle = viewSubtitle();
+    const subtitleY = 30 + titleLines.length * 23 + 8;
+    const top = Math.max(150, subtitleY + (subtitle ? wrapText(subtitle, 125).length * 17 : 0) + 65);
+    let cursor = top;
+    const rows = om ? model.all.map(row => {
+      const lines = wrapText(row.name, 46), height = Math.max(57, lines.length * 15 + 18), y = cursor + height / 2;
+      cursor += height;
+      return { row, lines, y };
+    }) : [];
+    const bottom = om ? cursor + 8 : top + 730, height = bottom + 245;
+    let minX = om ? 0 : 1, maxX = om ? 6 : 5, minY = 1, maxY = 5;
+    if (!om && state.zoom && model.visible.length) {
+      const xs = model.visible.map(r => r.x), ys = model.visible.map(r => r.evidence);
       if (model.medianX !== null) xs.push(model.medianX);
       if (model.medianY !== null) ys.push(model.medianY);
-
-      minX = Math.max(
-        1, Math.floor((Math.min(...xs) - 0.2) * 2) / 2
-      );
-      maxX = Math.min(
-        5, Math.ceil((Math.max(...xs) + 0.2) * 2) / 2
-      );
-      minY = Math.max(
-        1, Math.floor((Math.min(...ys) - 0.2) * 2) / 2
-      );
-      maxY = Math.min(
-        5, Math.ceil((Math.max(...ys) + 0.2) * 2) / 2
-      );
+      minX = Math.max(1, Math.floor((Math.min(...xs) - .2) * 2) / 2); maxX = Math.min(5, Math.ceil((Math.max(...xs) + .2) * 2) / 2);
+      minY = Math.max(1, Math.floor((Math.min(...ys) - .2) * 2) / 2); maxY = Math.min(5, Math.ceil((Math.max(...ys) + .2) * 2) / 2);
     }
-
-    const X = value =>
-      left + (value - minX) / (maxX - minX) * (right - left);
-
-    const Y = value =>
-      bottom - (value - minY) / (maxY - minY) * (bottom - top);
-
-    const radius = count =>
-      Math.sqrt(count * model.area / Math.PI) * state.size;
-
-    function line(x1, y1, x2, y2, dashed = false) {
-      return '\x3cline x1="' + x1 +
-        '" y1="' + y1 +
-        '" x2="' + x2 +
-        '" y2="' + y2 +
-        '" stroke="' + (dashed ? '#687785' : '#DDE5ED') + '"' +
-        (dashed ? ' stroke-dasharray="7 6"' : '') + '/>';
+    const X = v => left + (v - minX) / (maxX - minX) * (right - left);
+    const Y = v => bottom - (v - minY) / (maxY - minY) * (bottom - top);
+    const radius = n => Math.sqrt(n * model.area / Math.PI) * state.size;
+    const line = (x1, y1, x2, y2, dash = false) => `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${dash ? '#687785' : '#DDE5ED'}"${dash ? ' stroke-dasharray="7 6"' : ''}/>`;
+    function dot(r, x, y) {
+      const category = om ? methods[state.mi].category : r.category;
+      const description = r.id + ' — ' + r.name + '; evidence ' + format(r.evidence) + '; assessments ' + r.count + '; preferred ' + (r.preference ?? 'not displayed') + (om ? '; sample SD ' + format(r.sd) : '; timeliness ' + format(r.x));
+      return `<g role="button" tabindex="0" data-point="${escapeText(r.id)}" aria-label="${escapeText(description)}"><title>${escapeText(description)}</title><circle cx="${x}" cy="${y}" r="${radius(r.count)}" fill="${COLORS[category]}" fill-opacity=".8" stroke="#20364B" stroke-width="${borderWidth(r.preference)}"/></g>`;
     }
-
-    function dot(row, x, y) {
-      const category = objectiveMode
-        ? methods[state.mi].category
-        : row.category;
-
-      const description = row.id + ' — ' + row.name +
-        '; evidence ' + format(row.evidence) +
-        '; assessments ' + row.count +
-        '; preferred ' +
-        (row.preference === null ? 'not shown' : row.preference);
-
-      return '\x3cg role="button" tabindex="0" data-point="' +
-        escapeText(row.id) + '" aria-label="' +
-        escapeText(description) + '">' +
-        '\x3ctitle>' + escapeText(description) + '\x3c/title>' +
-        '\x3ccircle cx="' + x +
-        '" cy="' + y +
-        '" r="' + radius(row.count) +
-        '" fill="' + COLORS[category] +
-        '" fill-opacity=".8" stroke="#20364B" stroke-width="' +
-        borderWidth(row.preference) + '"/>\x3c/g>';
-    }
-
-    let result = '\x3csvg id="figure" ' +
-      'xmlns="http://www.w3.org/2000/svg" width="' + width +
-      '" height="' + height +
-      '" viewBox="0 0 ' + width + ' ' + height +
-      '" role="group" aria-label="' + escapeText(viewTitle()) + '">' +
-      '\x3crect width="' + width +
-      '" height="' + height + '" fill="white"/>' +
-      svgText(
-        viewTitle(),
-        objectiveMode ? 35 : 100,
-        objectiveMode ? 35 : 25,
-        objectiveMode ? 110 : 95,
-        objectiveMode ? 21 : 14,
-        objectiveMode ? 24 : 17,
-        'start', true
-      );
-
-    const stepX = state.zoom && !objectiveMode ? 0.5 : 1;
-
-    for (let tick = minX; tick <= maxX + 0.001; tick += stepX) {
-      result += line(X(tick), top - 20, X(tick), bottom) +
-        svgText(tick, X(tick), bottom + 25, 30, 13, 15, 'middle');
-    }
-
-    if (objectiveMode) {
-            objectiveRows.forEach(({ row, y, lines }) => {
-        result += line(left - 10, y, right, y) +
-          svgText(
-            row.name,
-            left - 17,
-            y - (lines.length - 1) * 7.5 + 4,
-            46, 12, 15, 'end'
-          );
-
-        if (row.evidence !== null && row.count > 0) {
-          result += dot(row, X(row.evidence), y);
-
-          if (state.values) {
-            result += svgText(
-              row.evidence.toFixed(2),
-              X(row.evidence) + radius(row.count) + 11,
-              y + 4
-            );
+    let s = `<svg id="figure" xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="group" aria-label="${escapeText(viewTitle())}"><rect width="${width}" height="${height}" fill="white"/>` + svgText(viewTitle(), 30, 30, 110, 18, 23, 'start', true);
+    if (subtitle) s += svgText(subtitle, 30, subtitleY, 125, 13, 17, 'start', false, '#66788A');
+    if (om) s += `<rect x="${X(1)}" y="${top - 18}" width="${X(5) - X(1)}" height="${bottom - top + 18}" fill="#F0F5FA"/>` + svgText('Valid rating scale: 1–5 (shaded); plotting range: 0–6', left, top - 35, 100, 12);
+    const stepX = !om && state.zoom ? .5 : 1;
+    for (let t = minX; t <= maxX + .001; t += stepX) s += line(X(t), top - 18, X(t), bottom) + svgText(t, X(t), bottom + 25, 30, 13, 15, 'middle');
+    if (om) {
+      rows.forEach(({ row: r, lines, y }) => {
+        s += line(left, y, right, y) + svgText(r.name, left - 17, y - (lines.length - 1) * 7.5 + 4, 46, 12, 15, 'end');
+        if (r.evidence !== null && r.count > 0) {
+          if (state.sd && r.sd !== null) {
+            const a = X(r.evidence - r.sd), b = X(r.evidence + r.sd);
+            s += `<g stroke="#20364B" stroke-width="1.5"><title>Mean ±1 SD: ${format(r.evidence - r.sd)}–${format(r.evidence + r.sd)}</title><line x1="${a}" y1="${y}" x2="${b}" y2="${y}"/><line x1="${a}" y1="${y - 6}" x2="${a}" y2="${y + 6}"/><line x1="${b}" y1="${y - 6}" x2="${b}" y2="${y + 6}"/></g>`;
           }
-        } else {
-          result += '\x3crect x="' + (left + 8) +
-            '" y="' + (y - 12) +
-            '" width="' + (right - left - 16) +
-            '" height="38" fill="white"/>' +
-            svgText(
-              'No evidence ratings available for this method–objective combination (n=0).',
-              left + 12, y + 4,
-              85, 12, 15
-            );
-        }
+          s += dot(r, X(r.evidence), y);
+          if (state.values) s += svgText(r.evidence.toFixed(2), X(r.evidence) + radius(r.count) + 9, y - 10);
+        } else s += `<rect x="${left + 1}" y="${y - 20}" width="${right - left - 2}" height="38" fill="white"/>` + svgText('No evidence ratings available for this method–objective combination (n=0).', left + 9, y - 3, 85, 12, 15, 'start', false, '#66788A');
       });
-
-      result += svgText(
-        'Mean weight of evidence',
-        (left + right) / 2,
-        bottom + 62, 100, 17, 15, 'middle'
-      ) +
-        svgText(
-          '1 = weakest; 5 = strongest',
-          (left + right) / 2,
-          bottom + 85, 100, 13, 15, 'middle'
-        ) +
-        drawLegends(bottom + 140, true);
-
+      s += svgText('Mean weight of evidence', (left + right) / 2, bottom + 62, 100, 17, 15, 'middle') + svgText('1 = weakest; 5 = strongest · Whiskers: mean ±1 sample SD, not CI', (left + right) / 2, bottom + 85, 120, 13, 15, 'middle');
     } else {
-      const stepY = state.zoom ? 0.5 : 1;
-
-      for (let tick = minY; tick <= maxY + 0.001; tick += stepY) {
-        result += line(left, Y(tick), right, Y(tick)) +
-          svgText(tick, left - 15, Y(tick) + 4, 30, 13, 15, 'end');
-      }
-
-      if (model.medianX !== null) {
-        result += line(
-          X(model.medianX), top - 20,
-          X(model.medianX), bottom, true
-        ) +
-          svgText(
-            'Timeliness median ' + format(model.medianX),
-            Math.max(left + 100, Math.min(right - 100, X(model.medianX))),
-            top - 35,
-            100, 12, 15, 'middle'
-          );
-      }
-
-      if (model.medianY !== null) {
-        result += line(
-          left, Y(model.medianY),
-          right, Y(model.medianY), true
-        ) +
-          svgText(
-            'Evidence median ' + format(model.medianY),
-            right + 15, Y(model.medianY) + 4,
-            19, 12, 15
-          );
-      }
-
-      [...model.visible]
-        .sort((a, b) => b.count - a.count)
-        .forEach(row => {
-          result += dot(row, X(row.x), Y(row.evidence));
-        });
-
+      const stepY = state.zoom ? .5 : 1;
+      for (let t = minY; t <= maxY + .001; t += stepY) s += line(left, Y(t), right, Y(t)) + svgText(t, left - 15, Y(t) + 4, 30, 13, 15, 'end');
+      if (model.medianX !== null) s += line(X(model.medianX), top - 18, X(model.medianX), bottom, true) + svgText('Timeliness median ' + format(model.medianX), Math.max(left + 100, Math.min(right - 100, X(model.medianX))), top - 35, 100, 12, 15, 'middle');
+      if (model.medianY !== null) s += line(left, Y(model.medianY), right, Y(model.medianY), true) + svgText('Evidence median ' + format(model.medianY), right + 15, Y(model.medianY) + 4, 19, 12);
+      [...model.visible].sort((a, b) => b.count - a.count).forEach(r => { s += dot(r, X(r.x), Y(r.evidence)); });
       if (state.labels) {
-        const positions = model.visible.map(row => ({
-          x: X(row.x),
-          y: Y(row.evidence) - radius(row.count) - 8,
-          targetX: X(row.x),
-          targetY: Y(row.evidence) - radius(row.count) - 8
-        }));
-
+        const positions = model.visible.map(r => ({ x: X(r.x), y: Y(r.evidence) - radius(r.count) - 8, targetX: X(r.x), targetY: Y(r.evidence) - radius(r.count) - 8 }));
         for (let iteration = 0; iteration < 110; iteration++) {
-          const forces = positions.map(position => [
-            (position.targetX - position.x) * 0.03,
-            (position.targetY - position.y) * 0.03
-          ]);
-
-          for (let i = 0; i < positions.length; i++) {
-            for (let j = i + 1; j < positions.length; j++) {
-              let dx = positions[i].x - positions[j].x;
-              let dy = positions[i].y - positions[j].y;
-
-              if (Math.abs(dx) < 32 && Math.abs(dy) < 18) {
-                if (Math.hypot(dx, dy) < 0.1) {
-                  dx = 1;
-                  dy = 1;
-                }
-
-                const distance = Math.hypot(dx, dy);
-                forces[i][0] += dx / distance;
-                forces[i][1] += dy / distance;
-                forces[j][0] -= dx / distance;
-                forces[j][1] -= dy / distance;
-              }
+          const forces = positions.map(p => [(p.targetX - p.x) * .03, (p.targetY - p.y) * .03]);
+          for (let i = 0; i < positions.length; i++) for (let j = i + 1; j < positions.length; j++) {
+            let dx = positions[i].x - positions[j].x, dy = positions[i].y - positions[j].y;
+            if (Math.abs(dx) < 32 && Math.abs(dy) < 18) {
+              if (Math.hypot(dx, dy) < .1) { dx = 1; dy = 1; }
+              const dist = Math.hypot(dx, dy);
+              forces[i][0] += dx / dist; forces[i][1] += dy / dist; forces[j][0] -= dx / dist; forces[j][1] -= dy / dist;
             }
           }
-
-          positions.forEach((position, i) => {
-            position.x = Math.max(
-              left + 10,
-              Math.min(right - 10, position.x + forces[i][0])
-            );
-
-            position.y = Math.max(
-              top + 8,
-              Math.min(bottom - 10, position.y + forces[i][1])
-            );
-          });
+          positions.forEach((p, i) => { p.x = Math.max(left + 10, Math.min(right - 10, p.x + forces[i][0])); p.y = Math.max(top + 8, Math.min(bottom - 10, p.y + forces[i][1])); });
         }
-
-        model.visible.forEach((row, i) => {
-          const position = positions[i];
-
-          if (
-            Math.hypot(
-              position.x - X(row.x),
-              position.y -
-                (Y(row.evidence) - radius(row.count) - 8)
-            ) > 10
-          ) {
-            result += line(
-              X(row.x), Y(row.evidence),
-              position.x, position.y + 3
-            );
-          }
-
-          result += '\x3ctext x="' + position.x +
-            '" y="' + position.y +
-            '" text-anchor="middle" font-size="11" ' +
-            'font-weight="bold" fill="#20364B" stroke="white" ' +
-            'stroke-width="3" paint-order="stroke" ' +
-            'pointer-events="none">' +
-            escapeText(row.id) + '\x3c/text>';
+        model.visible.forEach((r, i) => {
+          const p = positions[i];
+          if (Math.hypot(p.x - p.targetX, p.y - p.targetY) > 10) s += line(X(r.x), Y(r.evidence), p.x, p.y + 3);
+          s += `<text x="${p.x}" y="${p.y}" text-anchor="middle" font-size="11" font-weight="bold" fill="#20364B" stroke="white" stroke-width="3" paint-order="stroke" pointer-events="none">${escapeText(r.id)}</text>`;
         });
       }
-
-      if (!model.visible.length) {
-        result += svgText(
-          'No plottable methods in this selection.',
-          510, 480, 100, 16, 15, 'middle'
-        );
-      }
-
-      result += svgText(
-        'Mean timeliness (reverse-coded)',
-        510, 963, 100, 17, 15, 'middle'
-      ) +
-        svgText(
-          '1 = more than 1 year; 5 = up to 7 days',
-          510, 985, 100, 13, 15, 'middle'
-        ) +
-        '\x3ctext transform="translate(27 490) rotate(-90)" ' +
-        'text-anchor="middle" font-size="17" fill="#20364B">' +
-        'Mean weight of evidence\x3c/text>' +
-        '\x3ctext transform="translate(52 490) rotate(-90)" ' +
-        'text-anchor="middle" font-size="13" fill="#20364B">' +
-        '1 = weakest; 5 = strongest\x3c/text>' +
-        drawLegends(1040, false);
+      if (!model.visible.length) s += svgText('No plottable methods in this selection.', (left + right) / 2, (top + bottom) / 2, 100, 16, 15, 'middle');
+      s += svgText('Mean timeliness (reverse-coded)', (left + right) / 2, bottom + 63, 100, 17, 15, 'middle') + svgText('1 = more than 1 year; 5 = up to 7 days', (left + right) / 2, bottom + 85, 100, 13, 15, 'middle') + `<text transform="translate(27 ${(top + bottom) / 2}) rotate(-90)" text-anchor="middle" font-size="17" fill="#20364B">Mean weight of evidence</text><text transform="translate(52 ${(top + bottom) / 2}) rotate(-90)" text-anchor="middle" font-size="13" fill="#20364B">1 = weakest; 5 = strongest</text>` + line(left, top - 18, left, bottom);
     }
-
-    result += line(left, bottom, right, bottom);
-
-    if (!objectiveMode) {
-      result += line(left, top - 20, left, bottom);
-    }
-
-    return result + '\x3c/svg>';
+    return s + drawLegends(bottom + 140) + line(left, bottom, right, bottom) + '</svg>';
   }
 
-  function options(rows, value) {
-    return rows.map(row =>
-      '\x3coption value="' + escapeText(row[0]) + '" ' +
-      (String(row[0]) === String(value) ? 'selected' : '') +
-      '>' + escapeText(row[1]) + '\x3c/option>'
-    ).join('');
-  }
-
-  function checkbox(key, label, disabled = false) {
-    return '\x3clabel>\x3cinput type="checkbox" data-setting="' +
-      key + '" ' +
-      (state[key] ? 'checked ' : '') +
-      (disabled ? 'disabled' : '') +
-      '>' + escapeText(label) + '\x3c/label>';
-  }
-
-  function detailsHTML(row) {
-    if (!row) {
-      return '\x3cp class="note">' +
-        'Hover, click, tap, or use the selector to inspect values.' +
-        '\x3c/p>';
-    }
-
-    let result = '\x3cdiv class="stats">\x3cstrong>' +
-      escapeText(row.id + ' — ' + row.name) +
-      '\x3c/strong>\x3cdiv>Mean evidence: ' +
-      format(row.evidence) +
-      '\x3c/div>\x3cdiv>Evidence assessments: ' + row.count +
-      '\x3c/div>\x3cdiv>Preferred selections: ' +
-      (row.preference === null
-        ? 'Not displayed in overview'
-        : row.preference) +
-      '\x3c/div>';
-
+  function options(rows, value) { return rows.map(r => `<option value="${escapeText(r[0])}" ${String(r[0]) === String(value) ? 'selected' : ''}>${escapeText(r[1])}</option>`).join(''); }
+  function checkbox(key, label, disabled = false) { return `<label><input type="checkbox" data-setting="${key}" ${state[key] ? 'checked' : ''} ${disabled ? 'disabled' : ''}>${escapeText(label)}</label>`; }
+  function detailsHTML(r) {
+    if (!r) return '<p class="note">Hover, click, tap, or use the selector to inspect values.</p>';
+    let s = `<div class="stats"><strong>${escapeText(r.id + ' — ' + r.name)}</strong><div>Mean evidence: ${format(r.evidence)}</div><div>Evidence assessments: ${r.count}</div><div>Preferred selections: ${r.preference ?? 'Not displayed in overview'}</div>`;
     if (state.mode === 'methods') {
-      result += '\x3cdiv>Active timeliness: ' +
-        format(row.x) + '\x3c/div>';
-
-      if (state.oi >= 0) {
-        result += '\x3cdiv>Subgroup timeliness: ' +
-          format(row.subgroupTime) +
-          '\x3c/div>\x3cdiv>Subgroup timeliness respondents: ' +
-          row.subgroupCount + '\x3c/div>';
-      }
+      s += `<div>Overall timeliness: ${format(r.timeliness)}</div><div>Active timeliness: ${format(r.x)}</div>`;
+      if (state.oi >= 0) s += `<div>Subgroup timeliness: ${format(r.subgroupTime)}</div><div>Subgroup timeliness respondents: ${r.subgroupCount}</div>`;
+    } else {
+      s += `<div>Sample SD: ${format(r.sd)}</div>`;
+      if (r.sd !== null) s += `<div>Mean ±1 SD: ${format(r.evidence - r.sd)}–${format(r.evidence + r.sd)}</div>`;
+      if (r.count === 1) s += '<p class="note">Only one rating: sample SD cannot be calculated.</p>';
+      if (r.count === 2) s += '<p class="note">Based on only two ratings; dispersion estimate is unstable.</p>';
+      if (r.count >= 2 && r.sd === 0) s += '<p class="note">All observed ratings agree; this does not establish broader expert consensus.</p>';
+      if (!r.count) s += '<p class="note">No evidence ratings available for this method–objective combination (n=0).</p>';
     }
-
-    return result + '\x3c/div>';
+    return s + '</div>';
   }
-
   function render() {
     model = calculateView();
-
-    const objectiveMode = state.mode === 'objectives';
-
-    let html = '\x3cspan class="pill">UNITY · VERSION 2\x3c/span>' +
-      '\x3ch1>Timeliness, evidence and methodological preference\x3c/h1>' +
-      '\x3cp class="note">Compare methods for an objective, ' +
-      'or the evidence a method provides across objectives.\x3c/p>' +
-      '\x3csection class="card">\x3cdiv class="controls">' +
-      '\x3cbutton data-mode="methods" class="' +
-      (!objectiveMode ? 'tab' : '') +
-      '">Compare actionability of different methods to achieve objectives\x3c/button>' +
-      '\x3cbutton data-mode="objectives" class="' +
-      (objectiveMode ? 'tab' : '') +
-      '">Compare weight of evidence of a method to achieve different objectives\x3c/button>' +
-      '\x3cbutton id="reset">Reset\x3c/button>\x3c/div>' +
-      '\x3clabel>\x3cstrong>' +
-      (objectiveMode ? 'Method' : 'Knowledge objective') +
-      '\x3c/strong>\x3c/label>' +
-      '\x3cselect class="selector" data-setting="' +
-      (objectiveMode ? 'mi' : 'oi') +
-      '" aria-label="' +
-      (objectiveMode ? 'Method' : 'Knowledge objective') + '">' +
-      options(
-        objectiveMode
-          ? methods.map((method, index) => [
-            index, method.id + ' — ' + method.name
-          ])
-          : [
-            [-1, 'Overview — all objectives'],
-            ...db.objectives.map((objective, index) => [
-              index, objective[1]
-            ])
-          ],
-        objectiveMode ? state.mi : state.oi
-      ) +
-      '\x3c/select>\x3cdiv class="controls">';
-
-    if (objectiveMode) {
-      html += checkbox('values', 'Show evidence values');
-    } else {
-      html += '\x3clabel>Timeliness ' +
-        '\x3cselect data-setting="timing" ' +
-        (state.oi < 0 ? 'disabled' : '') + '>' +
-        options([
-          ['overall', 'Overall method estimate'],
-          ['subgroup', 'Among participants selecting this objective']
-        ], state.timing) +
-        '\x3c/select>\x3c/label>' +
-        checkbox(
-          'local', 'Selected-objective medians', state.oi < 0
-        ) +
-        checkbox(
-          'relative', 'Scale bubbles within objective', state.oi < 0
-        ) +
-        checkbox('labels', 'Method labels') +
-        checkbox('zoom', 'Zoom to observed values');
-    }
-
-    html += '\x3clabel>Dot size ' +
-      '\x3cinput type="range" data-setting="size" ' +
-      'min="0.7" max="1.7" step="0.1" value="' +
-      state.size + '">\x3c/label>\x3c/div>' +
-      '\x3cdiv class="controls">' +
-      '\x3cbutton data-export="svg">Export SVG\x3c/button>' +
-      '\x3cbutton data-export="png">Export PNG\x3c/button>' +
-      '\x3cbutton id="csv">Export view CSV\x3c/button>' +
-      '\x3cbutton id="json">Export all data JSON\x3c/button>' +
-      '\x3clabel>Load JSON locally ' +
-      '\x3cinput id="local" type="file" ' +
-      'accept=".json,application/json">\x3c/label>\x3c/div>' +
-      '\x3cp class="note">' +
-      (
-        objectiveMode
-          ? 'Objectives remain in their original numbered order. ' +
-            'Dot area shows evidence-assessment count; borders ' +
-            'show preferred-selection counts.'
-          : state.oi < 0
-            ? 'The overview uses uniform outlines. Preference-count ' +
-              'borders appear for individual objectives.'
-            : 'Preference-count borders use a fixed, modest ' +
-              'scale across objectives.'
-      ) +
-      '\x3c/p>';
-
-    if (
-      state.oi >= 0 &&
-      !objectiveMode &&
-      state.timing === 'subgroup'
-    ) {
-      html += '\x3cp class="note">' +
-        'Timeliness was rated once per method. This subgroup includes ' +
-        'participants selecting the objective who rated the method, ' +
-        'irrespective of whether they selected that method as relevant. ' +
-        'These are not direct objective-specific timeliness assessments.' +
-        '\x3c/p>';
-    }
-
-    html += '\x3cp class="note" id="status" role="status" ' +
-      'aria-live="polite">' + escapeText(status) +
-      '\x3c/p>\x3c/section>' +
-      '\x3cdiv class="layout">\x3cmain class="card plot ' +
-      (objectiveMode ? 'objective-plot' : '') + '">' +
-      drawChart() +
-      '\x3cdiv id="tip" class="tip" hidden>\x3c/div>' +
-      '\x3cdetails style="margin:12px">\x3csummary>Missing ratings (' +
-      model.missing.length + ' evidence' +
-      (model.missingTime.length
-        ? '; ' + model.missingTime.length + ' timeliness'
-        : '') +
-      ')\x3c/summary>\x3cp class="note">No evidence rating: ' +
-      (model.missing.length
-        ? model.missing.map(row => escapeText(row.id) + '*').join(', ')
-        : 'None') +
-      '.\x3c/p>';
-
-    if (model.missing.length) {
-      html += '\x3cp class="note">' +
-        '* Not plotted at zero. Missing evidence may reflect no ' +
-        'relevance selection or declining assessment due to lack ' +
-        'of knowledge; the dataset does not identify the reason.' +
-        '\x3c/p>';
-    }
-
-    if (model.missingTime.length) {
-      html += '\x3cp class="note">No subgroup timeliness: ' +
-        model.missingTime.map(row =>
-          escapeText(row.id) + '†'
-        ).join(', ') +
-        '. † Evidence is available; choose overall timeliness to ' +
-        'plot these methods. No values are silently substituted.' +
-        '\x3c/p>';
-    }
-
-    html += '\x3c/details>';
-
-    if (objectiveMode) {
-      html += '\x3cp class="note" style="margin:12px">' +
-        'labels and chart.\x3c/p>';
-    }
-
-    html += '\x3c/main>\x3caside>\x3csection class="card">\x3ch2>' +
-      (objectiveMode ? 'Selected methodology' : 'Broad methodology') +
-      '\x3c/h2>';
-
-    if (objectiveMode) {
-      html += '\x3cp style="color:' +
-        COLORS[methods[state.mi].category] + '">' +
-        escapeText(db.categories[methods[state.mi].category]) +
-        '\x3c/p>\x3cp class="note">' +
-        'A common dot-area scale is used across method-centred views. ' +
-        'It differs from the scatterplot scale.\x3c/p>';
-    } else {
-      html += db.categories.map((category, index) =>
-        '\x3cbutton class="category" data-category="' + index +
-        '" aria-pressed="' + !hidden.includes(index) +
-        '" style="opacity:' +
-        (hidden.includes(index) ? 0.4 : 1) + '">' +
-        '\x3cspan class="swatch" style="background:' +
-        COLORS[index] + '">\x3c/span>' +
-        escapeText(category) + '\x3c/button>'
-      ).join('') +
-        '\x3cp class="note">Click to hide/show. Overview medians ' +
-        'remain fixed. Selected-objective medians use currently ' +
-        'plotted methods.\x3c/p>';
-    }
-
-    html += '\x3c/section>\x3csection class="card">\x3ch2>' +
-      (objectiveMode ? 'Objective details' : 'Method details') +
-      '\x3c/h2>\x3cselect id="details-select" class="selector" ' +
-      'aria-label="Details selector">' +
-      options([
-        ['', objectiveMode ? 'Select an objective' : 'Select a method'],
-        ...model.all.map(row => [row.id, row.id + ' — ' + row.name])
-      ], chosen) +
-      '\x3c/select>\x3cdiv id="details">\x3c/div>' +
-      '\x3cbutton id="clear">Clear selection\x3c/button>' +
-      '\x3c/section>\x3csection class="card">' +
-      '\x3ch2>View summary\x3c/h2>\x3cdiv class="stats">';
-
-    if (objectiveMode) {
-      html += '\x3cdiv>' + model.visible.length +
-        ' objectives with evidence\x3c/div>\x3cdiv>' +
-        model.missing.length +
-        ' objectives without evidence\x3c/div>\x3cdiv>' +
-        model.all.reduce((total, row) =>
-          total + row.preference, 0
-        ) +
-        ' preferred selections for this method\x3c/div>';
-    } else {
-      html += '\x3cdiv>' + model.visible.length +
-        ' plotted methods\x3c/div>\x3cdiv>Timeliness median: ' +
-        format(model.medianX) +
-        '\x3c/div>\x3cdiv>Evidence median: ' +
-        format(model.medianY) + '\x3c/div>';
-
-      if (state.oi >= 0) {
-        html += '\x3cdiv>' +
-          model.all.reduce((total, row) =>
-            total + row.preference, 0
-          ) +
-          ' preferred selections across methods\x3c/div>';
-      }
-    }
-
-    html += '\x3c/div>';
-
-    if (!objectiveMode && state.oi >= 0 && state.relative) {
-      html += '\x3cp class="note">' +
-        'The largest evidence count in this objective matches the ' +
-        'reference area for 100 overview assessments. Disable ' +
-        'within-objective scaling for common count scaling across ' +
-        'objective scatterplots.\x3c/p>';
-    }
-
-    html += '\x3cp class="note">' +
-      'Border thickness increases by a square-root function on a ' +
-      'fixed scale across both views. Hover or select for exact counts. ' +
-      'Dot size does not change border thickness.\x3c/p>\x3c/section>' +
-      '\x3cdetails class="card">' +
-      '\x3csummary>Interpretation and data notes\x3c/summary>' +
-      '\x3cp class="note">Higher means indicate stronger assessed ' +
-      'evidence for a method–objective combination, not guaranteed ' +
-      'research outcomes. Preference is a separate judgement and ' +
-      'does not increase evidence means.\x3c/p>' +
-      '\x3cp class="note">Raw preference counts can reflect the ' +
-      'number answering for an objective. No preference percentages ' +
-      'are calculated. Assessment counts do not necessarily represent ' +
-      'independent respondents or statistical precision; some means ' +
-      'use very small samples.\x3c/p>' +
-      '\x3cp class="note">Timeliness in the JSON is already ' +
-      'reverse-coded (6 minus the original Excel mean). It is not ' +
-      'reversed again. Medians are unweighted method medians, ' +
-      'not absolute thresholds.\x3c/p>' +
-      '\x3cp class="note">Missing scores remain unavailable. Blank ' +
-      'preference cells were converted to zero. Original numbering ' +
-      'is retained: M24 is absent; M25 has no permanent asterisk.\x3c/p>' +
-      '\x3cp class="note">CSV exports include every method or ' +
-      'objective in the selected view, including hidden or unplotted ' +
-      'rows. Missing scores are empty fields. Full JSON includes ' +
-      'the preference-count field.\x3c/p>' +
-      '\x3cp class="note">Source: Scatterplot data_Unity dashboard.xlsx. ' +
-      'The dataset is loaded from dashboard_dataset.json on this ' +
-      'website. No tracking, external libraries or AI calls are used.' +
-      '\x3c/p>' +
-      '\x3cp class="note">Local JSON loading changes only this browser ' +
-      'session. To update public default data, replace ' +
-      'dashboard_dataset.json in the repository. The new preference ' +
-      'field means this dataset is not directly interchangeable ' +
-      'with the old website dataset.\x3c/p>' +
-      '\x3c/details>\x3c/aside>\x3c/div>' +
-      '\x3cp class="note">UNITY methods dashboard · Version 2\x3c/p>';
-
+    const om = state.mode === 'objectives', selectorLabel = om ? 'Select an objective' : 'Select a method';
+    let html = `<span class="pill">UNITY · VERSION 3</span><h1>Timeliness, evidence and methodological preference</h1><p class="note">Compare actionability across methods, or a method’s assessed weight of evidence across objectives.</p><section class="card"><div class="controls mode-controls"><button data-mode="methods" class="${!om ? 'tab' : ''}">Compare actionability of different methods to achieve objectives</button><button data-mode="objectives" class="${om ? 'tab' : ''}">Compare weight of evidence of a method to achieve different objectives</button><button id="reset">Reset</button></div><label><strong>${om ? 'Method' : 'Knowledge objective'}</strong></label><select class="selector" data-setting="${om ? 'mi' : 'oi'}" aria-label="${om ? 'Method' : 'Knowledge objective'}">${options(om ? methods.map((m, i) => [i, m.id + ' — ' + m.name]) : [[-1, 'Overview — all objectives'], ...db.objectives.map((o, i) => [i, o[1]])], om ? state.mi : state.oi)}</select><div class="controls">`;
+    if (om) html += checkbox('sd', 'Show mean ±1 SD whiskers') + checkbox('values', 'Show evidence values');
+    else html += `<label>Timeliness <select data-setting="timing" ${state.oi < 0 ? 'disabled' : ''}>${options([['overall', 'Overall method estimate'], ['subgroup', 'Among participants selecting this objective']], state.timing)}</select></label>` + checkbox('local', 'Selected-objective medians', state.oi < 0) + checkbox('relative', 'Scale bubbles within objective', state.oi < 0) + checkbox('labels', 'Method labels') + checkbox('zoom', 'Zoom to observed values');
+    html += `<label>Dot size <input type="range" data-setting="size" min="0.7" max="1.7" step="0.1" value="${state.size}"></label></div><div class="controls"><button data-export="svg">Export SVG</button><button data-export="png">Export PNG</button><button id="csv">Export view CSV</button><button id="json">Export all data JSON</button><label>Load JSON locally <input id="local" type="file" accept=".json,application/json"></label></div><p class="note">${om ? 'Objectives remain in numbered order. Whiskers show mean ±1 sample SD, not confidence intervals. Shading marks the valid 1–5 rating scale; the plot extends from 0 to 6.' : state.oi < 0 ? 'The overview uses uniform outlines. Preference-count borders appear for individual objectives.' : 'Preference-count borders use a fixed scale across objectives.'}</p>`;
+    if (!om && state.oi >= 0 && state.timing === 'subgroup') html += '<p class="note">Timeliness was rated once per method. This subgroup includes participants selecting the objective who rated the method, irrespective of whether they selected that method as relevant. These are not direct objective-specific timeliness assessments.</p>';
+    html += `<p class="note" id="status" role="status" aria-live="polite">${escapeText(status)}</p></section><div class="layout"><main class="card plot ${om ? 'objective-plot' : ''}">${drawChart()}<div id="tip" class="tip" hidden></div><details style="margin:12px"><summary>Missing ratings (${model.missing.length} evidence${model.missingTime.length ? '; ' + model.missingTime.length + ' timeliness' : ''})</summary><p class="note">No evidence ratings: ${model.missing.length ? model.missing.map(r => escapeText(r.id) + '*').join(', ') : 'None'}.</p>`;
+    if (model.missing.length) html += '<p class="note">* Not plotted at zero. Missing evidence may reflect no relevance selection or declining assessment due to lack of knowledge; the dataset does not identify the reason.</p>';
+    if (model.missingTime.length) html += `<p class="note">No subgroup timeliness: ${model.missingTime.map(r => escapeText(r.id) + '†').join(', ')}. † Evidence is available; choose overall timeliness to plot these methods. No values are silently substituted.</p>`;
+    html += '</details>' + (om ? '<p class="note" style="margin:12px">Long objective descriptions wrap onto multiple lines. The figure is designed to fit the available width once the updated stylesheet is installed.</p>' : '') + `</main><aside><section class="card"><h2>${om ? 'Selected methodology' : 'Broad methodology'}</h2>`;
+    if (om) html += `<p style="color:${COLORS[methods[state.mi].category]}">${escapeText(db.categories[methods[state.mi].category])}</p><p class="note">A common dot-area scale is used across method-centred views. It differs from the scatterplot scale.</p>`;
+    else html += db.categories.map((c, i) => `<button class="category" data-category="${i}" aria-pressed="${!hidden.includes(i)}" style="opacity:${hidden.includes(i) ? .4 : 1}"><span class="swatch" style="background:${COLORS[i]}"></span>${escapeText(c)}</button>`).join('') + '<p class="note">Click to hide/show. Overview medians remain fixed; selected-objective medians use currently plotted methods.</p>';
+    html += `</section><section class="card"><h2>${om ? 'Objective details' : 'Method details'}</h2><select id="details-select" class="selector" aria-label="${selectorLabel}">${options([['', selectorLabel], ...model.all.map(r => [r.id, r.id + ' — ' + r.name])], chosen)}</select><div id="details"></div><button id="clear">Clear selection</button></section><section class="card"><h2>View summary</h2><div class="stats"><div>${model.visible.length} ${om ? 'objectives with evidence' : 'plotted methods'}</div><div>${model.missing.length} without evidence ratings</div>`;
+    if (!om) html += `<div>Timeliness median: ${format(model.medianX)}</div><div>Evidence median: ${format(model.medianY)}</div>`;
+    if (om || state.oi >= 0) html += `<div>${model.all.reduce((n, r) => n + (r.preference || 0), 0)} preferred selections</div>`;
+    html += '</div>';
+    if (!om && state.oi >= 0 && state.relative) html += '<p class="note">The largest evidence count in this objective matches the reference area for 100 overview assessments. Disable within-objective scaling for common count scaling across objective scatterplots.</p>';
+    html += '<p class="note">Border thickness uses a fixed square-root function across both views. Dot size does not change border thickness.</p></section><details class="card"><summary>Interpretation and data notes</summary><p class="note">SD whiskers describe observed variation in ratings, not precision of the mean or confidence intervals. Dispersion estimates can be unstable with few assessments. Zero SD means agreement among the observed ratings, not necessarily broad expert consensus. Fewer than two ratings have no SD whiskers.</p><p class="note">Higher evidence means are assessments, not guaranteed research outcomes. Preference is a separate judgement and does not increase evidence means. Raw preference counts can reflect how many people answered for an objective. No preference percentages are calculated.</p><p class="note">Dot area represents evidence-assessment count, not statistical precision. Within-objective bubble areas cannot be compared across objectives. Timeliness in JSON is already reverse-coded (6 minus the original workbook mean); it is not reversed again. Medians are unweighted method medians, not absolute thresholds.</p><p class="note">Missing scores remain unavailable. Blank preference cells were converted to zero. M24 is absent; M25 retains its number without a permanent asterisk. Objective subtitles appear only in the selected-objective actionability view.</p><p class="note">CSV exports include every row in the selected view, including hidden or unplotted rows. Missing SDs and scores are empty fields. SD endpoints are descriptive values and may extend outside the rating scale.</p><p class="note">Source: Scatterplot data_Unity dashboard.xlsx. The website loads dashboard_dataset.json. No tracking, external libraries or AI calls are used. Local JSON loading changes only this browser session. Version 3 adds SDs and objective subtitles; older version 2 datasets remain loadable without those additions.</p></details></aside></div><p class="note">UNITY methods dashboard · Version 3</p>';
     app.innerHTML = html;
-    bindEvents();
-    updateDetails();
+    bindEvents(); updateDetails();
   }
-
-  function setMessage(text) {
-    status = text;
-    const element = document.getElementById('status');
-    if (element) element.textContent = text;
-  }
-
+  function setMessage(text) { status = text; const el = document.getElementById('status'); if (el) el.textContent = text; }
   function updateDetails() {
-    const active = hovered || chosen;
-    const row = model.all.find(item => item.id === active);
-    const tooltip = document.getElementById('tip');
-
+    const active = hovered || chosen, row = model.all.find(r => r.id === active), tip = document.getElementById('tip');
     document.getElementById('details').innerHTML = detailsHTML(row);
-
-    tooltip.hidden = !hovered || !row;
-    if (hovered && row) tooltip.innerHTML = detailsHTML(row);
-
-    document.querySelectorAll('[data-point]').forEach(group => {
-      group.querySelector('circle').setAttribute(
-        'fill-opacity',
-        active && group.dataset.point !== active ? '.35' : '.8'
-      );
-    });
+    tip.hidden = !hovered || !row;
+    if (hovered && row) tip.innerHTML = detailsHTML(row);
+    document.querySelectorAll('[data-point]').forEach(g => g.querySelector('circle').setAttribute('fill-opacity', active && g.dataset.point !== active ? '.35' : '.8'));
   }
-
   function bindEvents() {
-    document.querySelectorAll('[data-mode]').forEach(button => {
-      button.onclick = () => {
-        state.mode = button.dataset.mode;
-        chosen = '';
-        hovered = '';
-        render();
-      };
+    document.querySelectorAll('[data-mode]').forEach(b => { b.onclick = () => { state.mode = b.dataset.mode; chosen = ''; hovered = ''; render(); }; });
+    document.querySelectorAll('[data-setting]').forEach(el => { el.onchange = () => {
+      const key = el.dataset.setting;
+      state[key] = el.type === 'checkbox' ? el.checked : ['oi', 'mi', 'size'].includes(key) ? Number(el.value) : el.value;
+      hovered = ''; if (['oi', 'mi'].includes(key)) chosen = ''; render();
+    }; });
+    document.getElementById('reset').onclick = () => { state = { ...DEFAULTS }; hidden = []; chosen = ''; hovered = ''; render(); };
+    document.querySelectorAll('[data-category]').forEach(b => { b.onclick = () => { const c = Number(b.dataset.category); hidden = hidden.includes(c) ? hidden.filter(v => v !== c) : [...hidden, c]; hovered = ''; render(); }; });
+    document.querySelectorAll('[data-point]').forEach(g => {
+      g.onmouseenter = g.onfocus = () => { hovered = g.dataset.point; updateDetails(); };
+      g.onmouseleave = g.onblur = () => { hovered = ''; updateDetails(); };
+      g.onclick = () => { chosen = g.dataset.point; document.getElementById('details-select').value = chosen; updateDetails(); };
+      g.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); g.onclick(); } };
     });
-
-    document.querySelectorAll('[data-setting]').forEach(element => {
-      element.onchange = () => {
-        const key = element.dataset.setting;
-
-        state[key] = element.type === 'checkbox'
-          ? element.checked
-          : ['oi', 'mi', 'size'].includes(key)
-            ? Number(element.value)
-            : element.value;
-
-        hovered = '';
-
-        if (['oi', 'mi'].includes(key)) chosen = '';
-
-        render();
-      };
-    });
-
-    document.getElementById('reset').onclick = () => {
-      state = { ...DEFAULTS };
-      hidden = [];
-      chosen = '';
-      hovered = '';
-      render();
-    };
-
-    document.querySelectorAll('[data-category]').forEach(button => {
-      button.onclick = () => {
-        const category = Number(button.dataset.category);
-
-        hidden = hidden.includes(category)
-          ? hidden.filter(value => value !== category)
-          : hidden.concat(category);
-
-        hovered = '';
-        render();
-      };
-    });
-
-    document.querySelectorAll('[data-point]').forEach(group => {
-      group.onmouseenter = group.onfocus = () => {
-        hovered = group.dataset.point;
-        updateDetails();
-      };
-
-      group.onmouseleave = group.onblur = () => {
-        hovered = '';
-        updateDetails();
-      };
-
-      group.onclick = () => {
-        chosen = group.dataset.point;
-        document.getElementById('details-select').value = chosen;
-        updateDetails();
-      };
-
-      group.onkeydown = event => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          group.onclick();
-        }
-      };
-    });
-
-    document.getElementById('details-select').onchange = event => {
-      chosen = event.target.value;
-      hovered = '';
-      updateDetails();
-    };
-
-    document.getElementById('clear').onclick = () => {
-      chosen = '';
-      hovered = '';
-      document.getElementById('details-select').value = '';
-      updateDetails();
-    };
-
-    document.querySelectorAll('[data-export]').forEach(button => {
-      button.onclick = () => exportFigure(button.dataset.export);
-    });
-
+    document.getElementById('details-select').onchange = e => { chosen = e.target.value; hovered = ''; updateDetails(); };
+    document.getElementById('clear').onclick = () => { chosen = ''; hovered = ''; document.getElementById('details-select').value = ''; updateDetails(); };
+    document.querySelectorAll('[data-export]').forEach(b => { b.onclick = () => exportFigure(b.dataset.export); });
     document.getElementById('csv').onclick = exportCSV;
-
-    document.getElementById('json').onclick = () => {
-      download(
-        new Blob(
-          [JSON.stringify(db, null, 2)],
-          { type: 'application/json' }
-        ),
-        'dashboard_dataset_v2.json'
-      );
-    };
-
-    document.getElementById('local').onchange = async event => {
-      const file = event.target.files[0];
-      if (!file) return;
-
-      try {
-        const text = (await file.text()).replace(/^\uFEFF/, '');
-        loadDataset(JSON.parse(text));
-        setMessage('Local dataset loaded; public website data unchanged.');
-      } catch (error) {
-        setMessage('Local file rejected: ' + error.message);
-      }
+    document.getElementById('json').onclick = () => download(new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' }), 'dashboard_dataset_v3.json');
+    document.getElementById('local').onchange = async e => {
+      const file = e.target.files[0]; if (!file) return;
+      try { loadDataset(JSON.parse((await file.text()).replace(/^\uFEFF/, ''))); setMessage('Local dataset loaded; public website data unchanged.'); }
+      catch (error) { setMessage('Local file rejected: ' + error.message); }
     };
   }
-
   function download(blob, name) {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-
-    anchor.href = url;
-    anchor.download = name;
-
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-
+    const url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
-
-  function filename() {
-    if (state.mode === 'objectives') {
-      return methods[state.mi].id + '_objectives';
-    }
-
-    return state.oi < 0 ? 'Overview' : db.objectives[state.oi][0];
-  }
-
+  function filename() { return state.mode === 'objectives' ? methods[state.mi].id + '_objectives' : state.oi < 0 ? 'Overview' : db.objectives[state.oi][0]; }
   function exportCSV() {
-    const objectiveMode = state.mode === 'objectives';
-    const method = methods[state.mi];
-
-    const headings = objectiveMode
-      ? [
-        'Method ID',
-        'Method name',
-        'Objective ID',
-        'Objective',
-        'Mean weight of evidence',
-        'Evidence assessments',
-        'Preferred selections'
-      ]
-      : [
-        'View',
-        'Method ID',
-        'Method name',
-        'Broad methodology',
-        'Overall reverse-coded timeliness',
-        'Active reverse-coded timeliness',
-        'Objective-participant reverse-coded timeliness',
-        'Objective-participant timeliness respondents',
-        'Mean weight of evidence',
-        'Evidence assessments',
-        'Preferred selections'
-      ];
-
-    const rows = objectiveMode
-      ? model.all.map(row => [
-        method.id,
-        method.name,
-        row.id,
-        row.name,
-        row.evidence,
-        row.count,
-        row.preference
-      ])
-      : model.all.map(row => [
-        viewTitle(),
-        row.id,
-        row.name,
-        db.categories[row.category],
-        row.timeliness,
-        row.x,
-        row.subgroupTime,
-        row.subgroupCount,
-        row.evidence,
-        row.count,
-        row.preference
-      ]);
-
-    function cell(value) {
-      let text = value == null ? '' : String(value);
-
-      if (
-        typeof value === 'string' &&
-        /^[=+@-]/.test(text)
-      ) {
-        text = "'" + text;
-      }
-
-      return '"' + text.replace(/"/g, '""') + '"';
-    }
-
-    const csv = '\uFEFF' + [headings, ...rows]
-      .map(row => row.map(cell).join(','))
-      .join('\n');
-
-    download(
-      new Blob([csv], { type: 'text/csv;charset=utf-8' }),
-      filename() + '_data.csv'
-    );
-
+    const om = state.mode === 'objectives', m = methods[state.mi];
+    const headings = om ? ['Method ID', 'Method name', 'Objective ID', 'Objective', 'Mean weight of evidence', 'Evidence assessments', 'Preferred selections', 'Evidence sample SD', 'Mean minus SD', 'Mean plus SD', 'Overall reverse-coded timeliness'] : ['View', 'Method ID', 'Method name', 'Broad methodology', 'Overall reverse-coded timeliness', 'Active reverse-coded timeliness', 'Objective-participant reverse-coded timeliness', 'Objective-participant timeliness respondents', 'Mean weight of evidence', 'Evidence assessments', 'Preferred selections', 'Evidence sample SD'];
+    const rows = om ? model.all.map(r => [m.id, m.name, r.id, r.name, r.evidence, r.count, r.preference, r.sd, r.sd === null || r.evidence === null ? null : r.evidence - r.sd, r.sd === null || r.evidence === null ? null : r.evidence + r.sd, m.timeliness]) : model.all.map(r => [viewTitle(), r.id, r.name, db.categories[r.category], r.timeliness, r.x, r.subgroupTime, r.subgroupCount, r.evidence, r.count, r.preference, r.sd]);
+    function cell(v) { let text = v == null ? '' : String(v); if (typeof v === 'string' && /^[=+@-]/.test(text)) text = "'" + text; return '"' + text.replace(/"/g, '""') + '"'; }
+    download(new Blob(['\uFEFF' + [headings, ...rows].map(r => r.map(cell).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' }), filename() + '_data.csv');
     setMessage('CSV download initiated.');
   }
-
   async function exportFigure(type) {
     try {
       setMessage('Preparing ' + type.toUpperCase() + '…');
-
       const figure = document.getElementById('figure').cloneNode(true);
-
-      figure.setAttribute(
-        'style', 'font-family:Arial,Helvetica,sans-serif'
-      );
-
-      figure.querySelectorAll('circle').forEach(circle => {
-        circle.setAttribute('fill-opacity', '.8');
-      });
-
-      const svg = new Blob(
-        [new XMLSerializer().serializeToString(figure)],
-        { type: 'image/svg+xml;charset=utf-8' }
-      );
-
-      if (type === 'svg') {
-        download(svg, filename() + '_figure.svg');
-      } else {
+      figure.setAttribute('style', 'font-family:Arial,Helvetica,sans-serif');
+      figure.querySelectorAll('circle').forEach(c => c.setAttribute('fill-opacity', '.8'));
+      const svg = new Blob([new XMLSerializer().serializeToString(figure)], { type: 'image/svg+xml;charset=utf-8' });
+      if (type === 'svg') download(svg, filename() + '_figure.svg');
+      else {
         const url = URL.createObjectURL(svg);
-
         try {
           const image = new Image();
-
-          await new Promise((resolve, reject) => {
-            image.onload = resolve;
-            image.onerror = () =>
-              reject(new Error('SVG rendering failed; try SVG export.'));
-            image.src = url;
-          });
-
+          await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = () => reject(new Error('SVG rendering failed; try SVG export.')); image.src = url; });
           const canvas = document.createElement('canvas');
-
-          canvas.width = 2 * Number(figure.getAttribute('width'));
-          canvas.height = 2 * Number(figure.getAttribute('height'));
-
-          const context = canvas.getContext('2d');
-
-          if (!context) throw new Error('Canvas unavailable.');
-
-          context.fillStyle = 'white';
-          context.fillRect(0, 0, canvas.width, canvas.height);
-          context.drawImage(image, 0, 0, canvas.width, canvas.height);
-
-          const png = await new Promise(resolve => {
-            canvas.toBlob(resolve, 'image/png');
-          });
-
-          if (!png) throw new Error('PNG creation failed.');
-
+          canvas.width = 2 * Number(figure.getAttribute('width')); canvas.height = 2 * Number(figure.getAttribute('height'));
+          const context = canvas.getContext('2d'); if (!context) throw new Error('Canvas unavailable.');
+          context.fillStyle = 'white'; context.fillRect(0, 0, canvas.width, canvas.height); context.drawImage(image, 0, 0, canvas.width, canvas.height);
+          const png = await new Promise(resolve => canvas.toBlob(resolve, 'image/png')); if (!png) throw new Error('PNG creation failed.');
           download(png, filename() + '_figure.png');
-        } finally {
-          URL.revokeObjectURL(url);
-        }
+        } finally { URL.revokeObjectURL(url); }
       }
-
       setMessage('Figure download initiated.');
-
-    } catch (error) {
-      setMessage('Export failed: ' + error.message);
-    }
+    } catch (error) { setMessage('Export failed: ' + error.message); }
   }
-
   async function start() {
     try {
-      const response = await fetch(
-        './dashboard_dataset.json',
-        { cache: 'no-store' }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          'Dataset request returned HTTP ' + response.status
-        );
-      }
-
+      const response = await fetch('./dashboard_dataset.json', { cache: 'no-store' });
+      if (!response.ok) throw new Error('Dataset request returned HTTP ' + response.status);
       loadDataset(await response.json());
-
     } catch (error) {
-      app.innerHTML =
-        '\x3csection class="card">' +
-        '\x3ch1>Dashboard could not load\x3c/h1>' +
-        '\x3cp>' + escapeText(error.message) + '\x3c/p>' +
-        '\x3cp>Check that index.html, app.js, styles.css and ' +
-        'dashboard_dataset.json are together in the publishing folder. ' +
-        'Opening index.html directly from your computer can block ' +
-        'JSON loading; use GitHub Pages or a local web server.\x3c/p>' +
-        '\x3cbutton id="retry">Retry\x3c/button>\x3c/section>';
-
+      app.innerHTML = '<section class="card"><h1>Dashboard could not load</h1><p>' + escapeText(error.message) + '</p><p>Check that index.html, app.js, styles.css and dashboard_dataset.json are together in the publishing folder. Use GitHub Pages or a local web server, rather than opening index.html directly.</p><button id="retry">Retry</button></section>';
       document.getElementById('retry').onclick = start;
     }
   }
-
   start();
 })();
+
