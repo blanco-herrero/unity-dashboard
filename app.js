@@ -384,17 +384,25 @@
   function drawChart() {
     const objectiveMode = state.mode === 'objectives';
 
-    const width = objectiveMode ? 1340 : 1180;
-    const height = objectiveMode
-      ? Math.max(1570, 395 + model.all.length * 47)
-      : 1170;
-
-    const left = objectiveMode ? 745 : 100;
-    const right = objectiveMode ? 1285 : 920;
+    const width = 1180;
+    const left = objectiveMode ? 380 : 100;
+    const right = objectiveMode ? 1120 : 920;
     const top = objectiveMode ? 115 : 100;
-    const bottom = objectiveMode
-      ? top + (model.all.length - 1) * 47 + 36
-      : 900;
+
+    let rowCursor = top;
+
+    const objectiveRows = objectiveMode
+      ? model.all.map(row => {
+        const lines = wrapText(row.name, 46);
+        const rowHeight = Math.max(57, lines.length * 15 + 18);
+        const y = rowCursor + rowHeight / 2;
+        rowCursor += rowHeight;
+        return { row, y, lines };
+      })
+      : [];
+
+    const bottom = objectiveMode ? rowCursor + 8 : 900;
+    const height = objectiveMode ? bottom + 240 : 1170;
 
     let minX = 1;
     let maxX = 5;
@@ -488,15 +496,13 @@
     }
 
     if (objectiveMode) {
-      model.all.forEach((row, index) => {
-        const y = top + index * 47;
-
+            objectiveRows.forEach(({ row, y, lines }) => {
         result += line(left - 10, y, right, y) +
           svgText(
             row.name,
-            left - 25,
-            y - (wrapText(row.name, 93).length - 1) * 7 + 4,
-            93, 12, 14, 'end'
+            left - 17,
+            y - (lines.length - 1) * 7.5 + 4,
+            46, 12, 15, 'end'
           );
 
         if (row.evidence !== null && row.count > 0) {
@@ -512,10 +518,12 @@
         } else {
           result += '\x3crect x="' + (left + 8) +
             '" y="' + (y - 12) +
-            '" width="305" height="26" fill="white"/>' +
+            '" width="' + (right - left - 16) +
+            '" height="38" fill="white"/>' +
             svgText(
-              'No evidence assessment (n = 0)',
-              left + 12, y + 4
+              'No evidence ratings available for this method–objective combination (n=0).',
+              left + 12, y + 4,
+              85, 12, 15
             );
         }
       });
@@ -865,7 +873,6 @@
 
     if (objectiveMode) {
       html += '\x3cp class="note" style="margin:12px">' +
-        'Scroll horizontally if needed to view full objective ' +
         'labels and chart.\x3c/p>';
     }
 
