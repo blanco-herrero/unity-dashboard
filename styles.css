@@ -31,3 +31,9 @@ svg g[role=button]:focus circle{stroke-dasharray:3 2}
 .pill{display:inline-block;font-size:12px;border-radius:20px;padding:4px 10px;background:#eaf1f7;margin-bottom:9px}
 a{color:#285c88}
 @media(max-width:850px){#app{padding:10px}.layout{grid-template-columns:1fr}h1{font-size:23px}}
+.controls button[data-mode] {
+  flex: 1 1 280px;
+  white-space: normal;
+  text-align: left;
+  line-height: 1.4;
+}
