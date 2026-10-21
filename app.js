@@ -384,7 +384,7 @@
   function drawChart() {
     const objectiveMode = state.mode === 'objectives';
 
-    const width = objectiveMode ? 1340 : 1040;
+    const width = objectiveMode ? 1340 : 1180;
     const height = objectiveMode
       ? Math.max(1570, 395 + model.all.length * 47)
       : 1170;
@@ -546,9 +546,10 @@
           X(model.medianX), bottom, true
         ) +
           svgText(
-            'Median ' + format(model.medianX),
-            Math.min(800, X(model.medianX) + 8),
-            top + 12
+            'Timeliness median ' + format(model.medianX),
+            Math.max(left + 100, Math.min(right - 100, X(model.medianX))),
+            top - 35,
+            100, 12, 15, 'middle'
           );
       }
 
@@ -558,8 +559,9 @@
           right, Y(model.medianY), true
         ) +
           svgText(
-            'Median ' + format(model.medianY),
-            left + 10, Y(model.medianY) - 8
+            'Evidence median ' + format(model.medianY),
+            right + 15, Y(model.medianY) + 4,
+            19, 12, 15
           );
       }
 
